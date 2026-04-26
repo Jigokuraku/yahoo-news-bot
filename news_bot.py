@@ -10,7 +10,36 @@ import yfinance as yf
 WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 TICKERS_FILE = Path("tickers.txt")
 SEEN_FILE = Path("seen.json")
-MAX_SEEN = 2000  # 무한 증식 방지
+MAX_SEEN = 2000
+
+# 종목별 색깔 (Discord embed 좌측 세로 바)
+# 등록 안 된 종목은 DEFAULT_COLOR로 나오되 자동 색상 할당됨
+TICKER_COLORS = {
+    "AAPL": 0xA2AAAD,   # Apple - silver
+    "MSFT": 0x00A4EF,   # Microsoft - blue
+    "NVDA": 0x76B900,   # NVIDIA - green
+    "TSLA": 0xCC0000,   # Tesla - red
+    "GOOGL": 0x4285F4,  # Google - blue
+    "AMZN": 0xFF9900,   # Amazon - orange
+    "META": 0x0668E1,   # Meta - blue
+    "AMD":  0xED1C24,   # AMD - red
+    "NFLX": 0xE50914,   # Netflix - red
+}
+DEFAULT_COLOR = 0x95A5A6
+
+
+def auto_color(ticker):
+    """TICKER_COLORS에 없는 종목도 항상 같은 색으로 나오게 해시 기반 자동 할당."""
+    if ticker in TICKER_COLORS:
+        return TICKER_COLORS[ticker]
+    h = 0
+    for ch in ticker:
+        h = (h * 31 + ord(ch)) & 0xFFFFFF
+    # 너무 어둡거나 흐릿한 색 회피 (최소 채도/명도 확보)
+    r = 0x40 + (h & 0xBF)
+    g = 0x40 + ((h >> 8) & 0xBF)
+    b = 0x40 + ((h >> 16) & 0xBF)
+    return (r << 16) | (g << 8) | b
 
 
 def load_tickers():
@@ -41,8 +70,6 @@ def save_seen(seen_list):
 
 
 def normalize(item):
-    """yfinance의 신/구 뉴스 포맷 모두 처리."""
-    # 신 포맷 (yfinance >= 0.2.40)
     if isinstance(item.get("content"), dict):
         c = item["content"]
         url = ""
@@ -61,7 +88,6 @@ def normalize(item):
             "summary": c.get("summary") or c.get("description") or "",
             "pub_date": c.get("pubDate") or c.get("displayTime") or "",
         }
-    # 구 포맷
     pub = ""
     if item.get("providerPublishTime"):
         pub = datetime.fromtimestamp(
@@ -90,7 +116,7 @@ def build_embed(ticker, news):
     embed = {
         "title": (news["title"] or "(no title)")[:256],
         "author": {"name": f"${ticker}"},
-        "color": 0x1F8B4C,
+        "color": auto_color(ticker),
         "footer": {"text": news["publisher"] or "Yahoo Finance"},
     }
     if news["url"]:
@@ -106,12 +132,14 @@ def send_to_discord(embeds):
     if not WEBHOOK_URL:
         print("DISCORD_WEBHOOK_URL not set", file=sys.stderr)
         return
-    # Discord는 메시지당 최대 10 embed
     for i in range(0, len(embeds), 10):
         batch = embeds[i:i + 10]
-        resp = requests.post(WEBHOOK_URL, json={"embeds": batch}, timeout=15)
-        if resp.status_code >= 300:
-            print(f"Discord error {resp.status_code}: {resp.text}", file=sys.stderr)
+        try:
+            resp = requests.post(WEBHOOK_URL, json={"embeds": batch}, timeout=15)
+            if resp.status_code >= 300:
+                print(f"Discord error {resp.status_code}: {resp.text}", file=sys.stderr)
+        except requests.RequestException as e:
+            print(f"Discord request failed: {e}", file=sys.stderr)
 
 
 def main():
